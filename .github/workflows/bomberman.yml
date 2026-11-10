@@ -1,0 +1,66 @@
+name: Generate Bomberman contribution graph
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download pinned animation renderer
+        run: |
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/abozanona/pacman-contribution-graph/294c47eff28a41339a279107ae771b5fa020037a/dist/pacman-contribution-graph.min.js \
+            --output renderer.mjs
+
+      - name: Generate Bomberman animations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const originalFetch = globalThis.fetch;
+          globalThis.fetch = (input, options) => {
+            const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+            if (url.origin !== 'https://api.github.com') {
+              throw new Error('Only GitHub API requests are allowed.');
+            }
+            return originalFetch(input, options);
+          };
+          const { ArcadeRenderer } = await import('./renderer.mjs');
+          fs.mkdirSync('assets', { recursive: true });
+          for (const [theme, suffix] of [['github', ''], ['github-dark', '-dark']]) {
+            await new Promise((resolve, reject) => {
+              let saved = false;
+              const renderer = new ArcadeRenderer({
+                game: 'bomberman',
+                platform: 'github',
+                username: 'matheus-pereira-dev',
+                gameTheme: theme,
+                showMonthLabels: true,
+                githubSettings: { accessToken: process.env.GITHUB_TOKEN },
+                svgCallback(svg) {
+                  if (!svg || !svg.includes('<svg')) throw new Error('Missing SVG output.');
+                  fs.writeFileSync('assets/bomberman-contribution-graph' + suffix + '.svg', svg);
+                  saved = true;
+                },
+                gameOverCallback() {
+                  saved ? resolve() : reject(new Error('No animation generated.'));
+                },
+                pointsIncreasedCallback() {}
+              });
+              renderer.start().catch(reject);
+            });
+          }
+          NODE
+
+      - name: Save generated animations as an artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bomberman-contribution-graph
+          path: assets/*.svg
+          if-no-files-found: error
